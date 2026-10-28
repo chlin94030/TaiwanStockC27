@@ -1,0 +1,147 @@
+# ============================================================
+# 科斯托蘭尼量化選股實驗室 (Kosto Lab) — 預設設定
+# 修改本檔後重新執行「研究」即可；Streamlit 快速調整不會改寫本檔，
+# 但可下載當次設定 (config_used.yaml) 再貼回這裡。
+# ============================================================
+
+data:
+  start: "2017-01-01"        # 原始資料起點（需比回測起點早約 2 年，供「近2年法人買賣超」與 252 日因子暖機）
+  end: null                  # null = 抓到最新交易日
+  dir: data                  # 本機資料夾
+  pause_sec: 2.6             # 官方網站每次請求間隔（秒）。太快會被證交所暫時封鎖 IP
+  max_retries: 3
+  # 每種資料的來源優先順序；官方=證交所/櫃買/公開資訊觀測站整批（免費），finmind=逐檔 API
+  providers:
+    price: [official, finmind]
+    exright: [official, finmind]
+    institutional: [official, finmind]
+    margin: [official, finmind]
+    valuation: [official, finmind]
+    shares: [official, finmind]
+    revenue: [official, finmind]
+  finmind_hourly_quota: 550   # 免費 token 每小時 600 次，保留緩衝
+
+research:
+  start: "2019-01-01"        # 回測（訊號）起點
+  signal_step: 5             # 每 5 個交易日產生一次訊號（週頻）；中長線用多批次重疊持有
+  train_min_months: 24       # 走勢前進法：最少訓練月數
+  retrain_months: 6          # 每 6 個月重新估計權重
+  holdout_months: 12         # 最後 12 個月保留，不參與母池/模型挑選（盲測）
+  top_k: 10                  # 每次推薦 10 檔，等權
+  capital: 1000000           # 參考資金（計算容量限制）
+  max_participation: 0.005   # 單檔買進金額不超過 20 日均成交額的 0.5%（v1.3 採 V23.1 的較嚴容量限制；實測不降反升）
+  min_price: 10              # 母池基本門檻：股價
+  min_adv: 10000000          # 母池基本門檻：20 日均成交金額（元）
+  min_history: 120           # 母池基本門檻：上市交易滿 120 日
+  selection_weights:         # 開發期樣本外綜合評分（排名百分位加權）；v1.1 起以「贏 0050」為主
+    excess_cagr: 0.30        #   年化超額報酬（相對 0050）
+    info_ratio: 0.30         #   資訊比率（超額報酬 / 追蹤誤差）
+    sharpe: 0.20
+    calmar: 0.20
+  pool_smoothing: true       # 母池分數與相鄰大小平均（0.5/0.25/0.25），避免挑到單一幸運格
+  lambdas: [0.10, 0.25, 0.40]          # 階層式模型：科斯托蘭尼因子族群最低權重候選（λ）
+  sparse_k_alternatives: [3, 8]        # 精簡因子模型：除了預設 k 之外也比較的因子數
+  max_per_sector: null                 # 同產業最多幾檔（null=不限；實測 2/3 檔沒有穩定改善）
+  momentum_anchor:                     # v1.3 趨勢錨（固定權重，取自 V23.1 PRICE_RS；長線 30%）
+    t_rs120: 0.45
+    t_mom120x20: 0.30
+    t_high252: 0.25
+  acceptance:                          # v1.3 預先宣告的驗收閘門（參考 V23.1），報告逐項列出通過/未通過
+    excess_cagr_min: 0.05              #   年化超額報酬 ≥ 5 個百分點
+    ir_min: 0.5                        #   資訊比率 ≥ 0.5
+    max_extra_mdd: 0.10                #   最大回撤不得比 0050 深 10 個百分點以上
+    fold_months: 6                     #   每 6 個月一段的時序區塊
+    min_fold_win: 0.5                  #   至少一半區塊贏 0050
+    cost_stress: 0.005                 #   每次買賣來回多加 0.5% 成本後超額仍須 > 0
+  presample_test: true
+  lock_model: true                     # v1.3：使用設定檔指定的模型（多窗口「不退步原則」決定），不再只看開發期自動挑
+  sparse_exclude: [t_lowidio]          # 只給成長動能假說使用、不讓精簡模型自己挑的因子
+  score_hypotheses:                    # v1.4：ChatGPT V24 預先宣告的價格領先假說（固定權重）
+    PRICE_ALPHA_8_BALANCED: {t_rs120: 0.40, t_mom120x20: 0.25, t_high252: 0.20, t_lowidio: 0.15}
+    PRICE_ALPHA_5_LEADERS: {t_rs120: 0.60, t_mom120x20: 0.25, t_high252: 0.15}
+  growth_hypothesis:                   # V23.1 GROWTH_NO_FLOW 假說（ChatGPT 預先宣告；毛利率變化無資料 → 刪除後重新歸一）
+    f_rev_yoy3: 0.16
+    f_rev_accel: 0.20
+    f_eps_yoy: 0.14
+    t_rs120: 0.14
+    t_mom120x20: 0.13
+    t_high252: 0.10
+    t_lowidio: 0.06                 # 用 2021 年後資料訓練、回頭測 2019-2020（所有挑選都沒用過的期間）
+  exposure_profiles: [none, soft]      # strict 在真實資料兩段期間都拖累績效，v1.1 移出候選
+  core_mix: [0.3, 0.5, 0.7]  # 報告附「0050 核心＋本模型衛星」組合：0050 占比
+  n0_shrink: 26              # 權重向先驗收縮強度（等效樣本數）
+  max_factor_weight: 0.35    # 單一因子在族群內權重上限
+
+costs:
+  fee: 0.001425              # 手續費（買賣各一次）
+  fee_discount: 0.6          # 券商折扣（6 折）
+  tax: 0.003                 # 證交稅（賣出）
+  slippage: 0.001            # 滑價（單邊）
+
+pools:
+  rules: [ADV, MCAP, INST2Y, KOSTO, BLEND]
+  sizes: [100, 150, 200, 300, 400, 500]
+
+horizons:
+  short:
+    days: 5
+    label: 短線(5日)
+    # v1.5 短線重建「快調慢α」：舊短線用 5 日籌碼/反轉訊號，扣成本前其實有 +6%/年，但每週換 55% 持股、成本吃掉 20%/年。
+    # 5 日 IC 最高的其實是慢變因子（殖利率、本益比、營收創新高、低波動）；5 日籌碼/技術因子的 IC 多為負或不顯著。
+    # 作法：用中線標籤估計的慢α權重（label_horizon: mid）每 5 日重新檢視、只換掉跌出前 25 名的股票（續抱 2.5 倍）
+    # → 每次換手 55%→22%、成本拖累約 20%→7%/年。代價：與中線名單平均重疊約 8 成（兩者擇一操作）。
+    # 想回到舊短線：刪掉 label_horizon，model 改 {mode: opt, lam: 0.40, exposure: soft}、hysteresis 1.5（不建議）。
+    model: {mode: sparse, k: 5, tmin: 2.0, growth_blend: 0.3, exposure: none, hyp_blend: 0.5,
+            hypothesis: PRICE_ALPHA_8_BALANCED, label_horizon: mid}
+    weighting: equal
+    residual: bench                    # v1.3 benchmark-first：沒買股票的資金放 0050（不是現金）
+    family_prior: {T: 0.30, C: 0.30, F: 0.05, K: 0.35}
+    hysteresis: 2.5          # 已持有個股排名仍在前 2.5×K 內就續抱（律3 耐心、戒6 不隨風吹草動；v1.5 由 1.5 改 2.5）
+    stop_loss: null          # 短線持有期短，不設停損
+    alert_loss: 0.07         # 推薦表上的「警戒價」（僅提醒、不強制賣出）
+  mid:
+    days: 20
+    label: 中線(20日)
+    # v1.2：精簡因子模型（每 6 個月挑 t 值最高的 5 個因子、t>2），10 個面向研究中最穩定的改善
+    # v1.3：精簡5因子 70% ＋ 成長動能假說 30%（開發期 −1pp，盲測 +22pp、2019-20 未用期間 +1pp → 依「不退步原則」採用）
+    # v1.4：v1.3 模型 50% ＋ V24 PRICE_ALPHA_8_BALANCED 50%（預先宣告的三窗口名次規則選出；見 docs）
+    model: {mode: sparse, k: 5, tmin: 2.0, growth_blend: 0.3, exposure: none, hyp_blend: 0.5, hypothesis: PRICE_ALPHA_8_BALANCED}
+    weighting: equal
+    residual: bench
+    family_prior: {T: 0.20, C: 0.25, F: 0.15, K: 0.40}
+    hysteresis: 2.0
+    stop_loss: null          # v1.1：實測機械式停損在開發期與盲測期都拖累績效 → 預設關閉（消融表會測「加回停損」）
+    stop_loss_test: 0.12     # 消融測試用的停損幅度
+    alert_loss: 0.12         # 推薦表上的「警戒價」（戒3 提醒：跌破時重新檢視理由，不自動賣出）
+  long:
+    days: 60
+    label: 長線(60日)
+    # v1.3：精簡6因子＋30% 趨勢錨（5 個母池 IR 全進步）；成長動能假說在 2019-20 未用期間退步 → 未採用（報告列為對照）
+    # v1.4：v1.3 模型 50% ＋ V24 PRICE_ALPHA_5_LEADERS 50%（報酬較高但回撤較深；保守者可把 hyp_blend 改 0 回到 v1.3）
+    model: {mode: sparse, k: 6, tmin: 1.0, anchor: 0.3, exposure: soft, hyp_blend: 0.5, hypothesis: PRICE_ALPHA_5_LEADERS}
+    weighting: rank                    # 名次加權（第1名 1.5 倍 → 第10名 0.5 倍），4 個參考母池前後半段都進步
+    residual: bench                    # 市場階段減碼的資金改放 0050
+    family_prior: {T: 0.15, C: 0.20, F: 0.25, K: 0.40}
+    hysteresis: 2.5
+    stop_loss: null
+    stop_loss_test: 0.18
+    alert_loss: 0.18
+
+kostolany:
+  # 個股階段閘門（雞蛋理論）：A3 過熱、B1 開始下跌 → 不新買；B2 相隨下跌 → 等待
+  # v1.1：個股階段閘門在真實資料的消融測試中拖累三種期間（開發期與盲測期皆然）→ 預設關閉；
+  # 想恢復請改成 [A3, B1, B2] 與 true。市場階段、M 頭閘門與 K 因子仍保留。
+  block_stages: []
+  b3_requires_confirmation: false    # B3 恐慌逆向買進，需 W 底/止跌確認
+  block_double_top: true             # M 頭（多次攻不過）不買
+  overheat_gate: false               # 不追高閘門（RSI>84 或乖離20日>14% 不買；V23.1 規則）— 實測中線 −9%、長線 −3%/年 → 預設關
+  max_rsi: 84
+  max_bias20: 0.14
+  # 市場雞蛋階段 → 持股水位
+  exposure:
+    none:   {A1: 1.0, A2: 1.0, A3: 1.0, B1: 1.0, B2: 1.0, B3: 1.0, UNKNOWN: 1.0}
+    soft:   {A1: 1.0, A2: 1.0, A3: 0.6, B1: 0.5, B2: 0.4, B3: 1.0, UNKNOWN: 0.8}
+    strict: {A1: 1.0, A2: 1.0, A3: 0.3, B1: 0.0, B2: 0.0, B3: 1.0, UNKNOWN: 0.5}
+
+app:
+  chart_days: 500          # v1.6 看盤資料包：K 線／籌碼圖保留的交易日數（約 2 年，年線需要 240 日）

@@ -1,0 +1,156 @@
+name: Alpha Radar PRO 每日資料與策略更新
+
+# 不需要任何設定：
+#  * 上傳程式到 GitHub 的那一刻就會自動開始（push 觸發）
+#  * 第一次建資料庫（約 4~5 小時）若一輪跑不完，會「自己再啟動下一輪」直到完成，最多 8 輪
+#  * 資料完整後自動做研究、產生報告、更新 App
+#  * 之後每個交易日台北 23:10 自動更新；並自動保持排程不被 GitHub 停用
+
+on:
+  push:
+    branches: [main, master]
+    paths: ["config/**", "kosto/**", "cli.py", "compare/**", ".github/workflows/pipeline.yml"]
+  schedule:
+    - cron: "10 15 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "auto=自動判斷 / full=強制完整研究 / quick=快速研究 / data-only=只更新資料"
+        type: choice
+        options: [auto, full, quick, data-only]
+        default: auto
+      round:
+        description: "自動續跑輪次（請勿修改）"
+        default: "0"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: kosto-pipeline
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  DATA_TAG: kosto-data
+  RESEARCH_TAG: kosto-research
+  MODE: ${{ inputs.mode || 'auto' }}
+  ROUND: ${{ inputs.round || '0' }}
+
+jobs:
+  init:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: 建立資料存放區（第一次）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$DATA_TAG" >/dev/null 2>&1 || gh release create "$DATA_TAG" --title "Kosto data store" \
+            --notes "原始資料庫（自動維護，請勿刪除）" --latest=false || true
+          gh release view "$RESEARCH_TAG" >/dev/null 2>&1 || gh release create "$RESEARCH_TAG" --title "Kosto research" \
+            --notes "最新研究結果與完整報告（每日自動更新）" --latest=false || true
+
+  data:
+    needs: init
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [price, institutional, margin, valuation, misc]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-pipeline.txt
+      - run: pip install -r requirements-pipeline.txt
+      - name: 下載既有資料
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$DATA_TAG" -p "data-${{ matrix.group }}.tar.gz" -D . --clobber || echo "第一次執行：尚無資料"
+          if [ -f "data-${{ matrix.group }}.tar.gz" ]; then python cli.py unpack "data-${{ matrix.group }}.tar.gz"; fi
+      - name: 更新 ${{ matrix.group }}（可續傳）
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+        run: python cli.py update --group ${{ matrix.group }} --budget 330
+      - name: 存回資料
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -d data/raw ] || ls data/state_*.json >/dev/null 2>&1; then
+            python cli.py pack --group ${{ matrix.group }} --out "data-${{ matrix.group }}.tar.gz"
+            gh release upload "$DATA_TAG" "data-${{ matrix.group }}.tar.gz" --clobber
+          fi
+
+  finish:
+    needs: data
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-pipeline.txt
+      - run: pip install -r requirements-pipeline.txt
+      - name: 取回全部資料
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$DATA_TAG" -p "data-*.tar.gz" -D . --clobber || true
+          ls data-*.tar.gz >/dev/null 2>&1 && python cli.py unpack data-*.tar.gz || true
+      - name: 檢查資料完成度
+        id: prog
+        run: python cli.py progress --github-output
+      - name: 研究＋完整報告
+        id: research
+        if: ${{ env.MODE != 'data-only' && (steps.prog.outputs.complete == 'true' || env.MODE == 'full' || env.MODE == 'quick') }}
+        run: |
+          python cli.py bundle --compare-panel
+          ARGS=""
+          if [ "$MODE" = "quick" ]; then ARGS="--quick"; fi
+          CMP=$(ls compare/*.csv compare/*.zip 2>/dev/null | tr '\n' ' ')
+          if [ -n "$CMP" ]; then ARGS="$ARGS --compare $CMP"; fi
+          python cli.py research $ARGS
+          python cli.py validate-v27
+          python cli.py summary >> "$GITHUB_STEP_SUMMARY"
+      - name: 發布到 App
+        if: ${{ steps.research.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RESEARCH_TAG" artifacts/bundle.npz artifacts/desk_summary.json artifacts/v27_validation.json artifacts/results.pkl artifacts/report.zip --clobber
+      - name: 資料還沒抓完 → 自動啟動下一輪
+        if: ${{ steps.prog.outputs.complete != 'true' && env.MODE != 'data-only' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$ROUND" -lt 8 ]; then
+            gh workflow run pipeline.yml --ref "${{ github.ref_name }}" -f mode=auto -f round=$((ROUND + 1))
+            echo "已自動排入第 $((ROUND + 1)) 輪" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "已連續 8 輪仍未完成，請看 App 首頁的說明" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 更新狀態檔（App 讀取）＋保持排程有效
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          STAGE=downloading
+          if [ "${{ steps.research.outcome }}" = "success" ]; then STAGE=done; fi
+          if [ "${{ steps.prog.outputs.complete }}" != "true" ] && [ "$ROUND" -ge 8 ]; then STAGE=stuck; fi
+          git config user.name "kosto-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase --autostash || true
+          python cli.py progress --write status/status.json --stage "$STAGE" || true
+          git add status/status.json
+          git commit -m "自動更新狀態：$STAGE" || true
+          git push || true
+          gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/pipeline.yml/enable" || true

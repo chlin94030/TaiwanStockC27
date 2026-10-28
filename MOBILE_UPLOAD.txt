@@ -1,0 +1,26 @@
+Alpha Radar PRO Global V27｜iPhone 同層上傳版
+日期：2026-10-28
+
+解壓後只有同一層檔案，不需要打開任何子資料夾：
+app.py、cli.py、alpharadar_core.zip、requirements.txt、requirements-pipeline.txt、
+START_HERE.txt、pipeline_workflow_COPY.txt。
+
+最適合的用法：更新原本已部署Kosto／CLAUDE選股網站的GitHub儲存庫。
+
+iPhone操作：
+1. 在「檔案」App點ZIP，系統會解壓成一個資料夾。
+2. 打開該資料夾，裡面就是上述同一層檔案。
+3. Safari開啟原GitHub儲存庫，選 Add file → Upload files → 選擇檔案。
+4. 在iPhone檔案選取畫面按右上角「…」→ 選取，將同層檔案全部選起來後上傳。
+5. Commit changes。現有.github工作流程、data、artifacts及Releases都保留，不需用手機進入子資料夾。
+
+重要：alpharadar_core.zip 是正式程式核心，上傳前後都不要再解壓；app.py與cli.py會自動讀取。
+
+全新GitHub儲存庫先上傳這7個檔案即可啟動網站及匯入bundle.npz；每日自動更新另需
+.github/workflows/pipeline.yml。手機一般Upload files不能建立隱藏子路徑，可在GitHub選
+Add file → Create new file，檔名輸入 .github/workflows/pipeline.yml，再貼上
+pipeline_workflow_COPY.txt。這是GitHub目錄規則，不能由平面檔名取代。
+
+若沒有正式bundle.npz，先用操作示範。先前提供的kosto-lab_2.zip只有程式，沒有行情資料庫。
+
+0050不是必選：選「純個股均衡」或「純個股主動」，0050即為0%；自訂也可設0%。
